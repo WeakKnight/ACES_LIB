@@ -1,36 +1,40 @@
 #include <iostream>
+#include <fstream>
+#include <cstdint>
 #include "OutputTransform.h"
 
 extern "C"
 {
-    typedef struct vec3
+    void GenLut(const char* path, float mid)
     {
-        float x;
-        float y;
-        float z;
-    } vec3;
+        float data[64 * 64 * 64 * 4];
+        float *dataPtr = &data[0];
 
-    vec3 ComputeLutValue(float rpq, float gpq, float bpq, float mid)
-    {
-        float3 result;
-        float3 pq = float3(rpq, gpq, bpq);
-        float3 lin = ST2084_2_Y_f3(pq);
-        
-        const float Y_MIN = 0.0001;                     // black luminance (cd/m^2)
-        const float Y_MAX = 1000.0;                     // peak white luminance (cd/m^2)
-        
-        const Chromaticities DISPLAY_PRI = REC2020_PRI; // encoding primaries (device setup)
-        const Chromaticities LIMITING_PRI = REC2020_PRI;// limiting primaries
-        
-        result = OutputTransform(lin, Y_MIN, mid, Y_MAX, DISPLAY_PRI, LIMITING_PRI);
-        vec3 res;
-        res.x = result.x;
-        res.y = result.y;
-        res.z = result.z;
-        
-        return res;
+        size_t lutLength = 64 * 64 * 64;
+        for(int x = 0; x < lutLength; x++)
+        {
+            // from 1d to 3d
+            int i = int(x / (64 * 64 ));
+            int j = int((x - (i * 64 * 64)) / 64);
+            int k = x - (i * 64 * 64 + j * 64);
+            
+            float rIn = float(k)/63.0f;
+            float gIn = float(j)/63.0f;
+            float bIn = float(i)/63.0f;
+            
+            float3 cIn = float3(rIn, gIn, bIn);
+            float3 lutValue = ComputeLutValue(cIn, mid);
+            
+            int index = (int)(i * 64 * 64 + j * 64 + k);
+            dataPtr[index * 4 + 0] = lutValue.x;
+            dataPtr[index * 4 + 1] = lutValue.y;
+            dataPtr[index * 4 + 2] = lutValue.z;
+            dataPtr[index * 4 + 3] = 0.0f;
+        }
+
+        std::fstream file;
+        file.open(path, std::ios::app | std::ios::binary);
+        file.write(reinterpret_cast<char*>(dataPtr), sizeof(float) * 64 * 64 * 64 * 4); // ideally, you should memcpy it to a char buffer.
+        file.close();
     }
 }
-// void say_hello(){
-//     std::cout << "Hello, from ACESLib!\n";
-// }
