@@ -1,14 +1,21 @@
+#include "ACESLib.h"
 #include <iostream>
 #include <fstream>
 #include <cstdint>
 #include "OutputTransform.h"
 
+static float* dataPtr = nullptr; 
+
 extern "C"
 {
-    void GenLut(const char* path, float mid)
+    void* GenLut(float mid)
     {
-        float data[64 * 64 * 64 * 4];
-        float *dataPtr = &data[0];
+        if(dataPtr != nullptr)
+        {
+            delete dataPtr;
+        }
+
+        dataPtr = new float[64 * 64 * 64 * 4];
 
         size_t lutLength = 64 * 64 * 64;
         for(int x = 0; x < lutLength; x++)
@@ -32,9 +39,6 @@ extern "C"
             dataPtr[index * 4 + 3] = 0.0f;
         }
 
-        std::fstream file;
-        file.open(path, std::ios::app | std::ios::binary);
-        file.write(reinterpret_cast<char*>(dataPtr), sizeof(float) * 64 * 64 * 64 * 4); // ideally, you should memcpy it to a char buffer.
-        file.close();
+        return (void*)dataPtr;
     }
 }
