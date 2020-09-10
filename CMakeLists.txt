@@ -5,3 +5,5 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14")
 
 add_library(ACESLib SHARED ACESLib.cpp metal_math.cpp)
 
+add_executable(ACESLibTest Test.cpp)
+target_link_libraries(ACESLibTest ACESLib)

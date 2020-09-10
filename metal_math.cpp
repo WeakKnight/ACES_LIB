@@ -118,6 +118,11 @@ float3 operator*(float3x3 m, float3 v)
     };
 }
 
+float3 operator*(float3 v1, float3 v2)
+{
+    return {v1.x * v2.x, v1.y * v2.y, v1.z * v2.z};
+}
+
 float3 operator*(float scaler, float3 v)
 {
     return {scaler * v.x, scaler * v.y, scaler * v.z};

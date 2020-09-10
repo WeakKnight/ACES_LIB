@@ -844,13 +844,6 @@ float3 OutputTransform(float3 input,
     float3 linearCV = Y_2_linCV_f3( rgbPost, Y_MAX, Y_MIN);
     // Rendering primaries to XYZ
     float3 XYZ = linearCV * AP1_2_XYZ_MAT;
-    
-    // Gamut limit to limiting primaries
-    // NOTE: Would be nice to just say
-    //    if (LIMITING_PRI != DISPLAY_PRI)
-    // but you can't because Chromaticities do not work with bool comparison operator
-    // For now, limit no matter what.
-    XYZ = limit_to_primaries( XYZ, LIMITING_PRI);
     XYZ = XYZ * D60_2_D65_CAT;
     // CIE XYZ to display encoding primaries
     linearCV = XYZ_2_DISPLAY_PRI_MAT * XYZ;
@@ -860,13 +853,174 @@ float3 OutputTransform(float3 input,
     return outputCV;
 }
 
+float3 RRT(float3 input)
+{
+    float3 rgbPre = rrt_sweeteners(input);
+    return rgbPre;
+}
+
+float3 ComputeRRTLutValue(float3 lin)
+{
+    return RRT(lin);
+}
+
+float3 ColorExpanding(float3 ap0)
+{
+    
+    return ap0;
+}
+
+float3 ACESHDR10Standard(float3 lin, float mid)
+{
+    const float Y_MIN = 0.0001f;                     // black luminance (cd/m^2)
+    const float Y_MAX = 1000.0f;                     // peak white luminance (cd/m^2)
+    
+    const Chromaticities DISPLAY_PRI = REC2020_PRI; // encoding primaries (device setup)
+    const Chromaticities LIMITING_PRI = REC2020_PRI;// limiting primaries
+
+    // Color Expanding
+
+
+    float3 result = OutputTransform(1.5f * lin, Y_MIN, mid, Y_MAX, DISPLAY_PRI, LIMITING_PRI);
+
+    return result;
+}
+
 float3 ComputeLutValue(float3 pq, float mid)
+{
+    float3 lin = ST2084_2_Y_f3(pq);
+    
+    return ACESHDR10Standard(lin, mid);
+}
+
+constant float3x3 ACESInputMatrix = //AP0_2_AP1_MAT * CONST_RRT_SAT_MAT;
+{
+    {0.865855216, 0.262915015, -0.128670529},
+    {0.0409506075,1.03673851,  -0.0777018442},
+    {0.0309127532, 0.11267148, 0.856339156}
+};
+
+constant float3x3 ACESOutputMatrix = //AP1_2_XYZ_MAT * D60_2_D65_CAT * XYZ_2_Rec2020_MAT;
+{
+    {1.02579927, -0.0200525038, -0.00577139854},
+    {-0.0022350112, 1.00458252, -0.00235230662},
+    {-0.00501400419, -0.0252933856, 1.03044021}
+};
+
+float ssts_fitting(float x)
+{
+    static const float contrast = 3.18016763;
+    static const float shoulder = 1.15319486;
+    static const float b = 0.30002518;
+    static const float c = 132.42972136;
+
+    float logx = log10(x);
+
+    float z = pow(logx + 6.0f, contrast);
+    float logy = z / (pow(z, shoulder) * b + c);
+
+    float y = pow(10.0, logy * 7.0f - 4.0f);
+    y = clamp(y, 0.001f, 65535.0f);
+    return y;
+}
+
+float3 ssts_fitting_f3(float3 val)
+{
+    float3 res;
+    res[0] = ssts_fitting(val[0]);
+    res[1] = ssts_fitting(val[1]);
+    res[2] = ssts_fitting(val[2]);
+    return res; 
+}
+
+float3 inv_ssts_f3(float3 val, TsParams C)
+{
+    float3 res;
+    res[0] = inv_ssts(val[0], C);
+    res[1] = inv_ssts(val[1], C);
+    res[2] = inv_ssts(val[2], C);
+    return res; 
+}
+
+float3 rrt_sweeteners_fitting(float3 aces)
+{    
+    const float RRT_SAT_FACTOR = 0.96;
+    float3x3 RRT_SAT_MAT = calc_sat_adjust_matrix( RRT_SAT_FACTOR, AP1_RGB2Y);
+    
+    // --- ACES to RGB rendering space --- //
+    aces = clamp( aces, 0., 65535.);
+    float3 rgbPre = aces * AP0_2_AP1_MAT;
+    rgbPre = clamp( rgbPre, 0., 65504.);
+    
+    // --- Global desaturation --- //
+    rgbPre = RRT_SAT_MAT * rgbPre;
+    return rgbPre;
+}
+
+
+float3 rrt_sweeteners_fitting_backward(float3 rgbPre)
+{    
+    const float RRT_SAT_FACTOR = 0.96;
+    float3x3 RRT_SAT_MAT = calc_sat_adjust_matrix( RRT_SAT_FACTOR, AP1_RGB2Y);
+    
+    rgbPre = inverse(RRT_SAT_MAT) * rgbPre;
+    float3 aces = rgbPre * inverse(AP0_2_AP1_MAT);
+
+    return aces;
+}
+
+float3 ForwardWrappingPrecise(float3 lin)
+{
+    const float Y_MIN = 0.0001;                     // black luminance (cd/m^2)
+    const float Y_MAX = 1000.0;                     // peak white luminance (cd/m^2)
+    const float mid   = 15.0;
+    float3x3 XYZ_2_DISPLAY_PRI_MAT = XYZtoRGB(REC2020_PRI);
+    TsParams PARAMS_DEFAULT = init_TsParams( Y_MIN, Y_MAX);
+    float expShift = log2(inv_ssts(mid, PARAMS_DEFAULT))-log2(0.18);
+    TsParams PARAMS = init_TsParams( Y_MIN, Y_MAX, expShift);
+
+    float3 rgbPre = rrt_sweeteners_fitting(lin);
+    rgbPre = clamp(rgbPre, 0.00001f, 65535.0f);
+    float3 rgbPost = ssts_f3(rgbPre, PARAMS);
+
+    rgbPost = rgbPost * AP1_2_XYZ_MAT;
+    rgbPost = rgbPost * D60_2_D65_CAT;
+
+    float3 linearCV = XYZtoRGB(REC2020_PRI) * rgbPost;
+    linearCV = clamp(linearCV, 0.00000001f, 65535.0f);
+    float3 outputCV = Y_2_ST2084_f3(linearCV);
+    return outputCV;
+}
+
+float3 BackwardWrappingPrecise(float3 outputCV)
+{
+    const float Y_MIN = 0.0001;                     // black luminance (cd/m^2)
+    const float Y_MAX = 1000.0;                     // peak white luminance (cd/m^2)
+    const float mid   = 15.0;
+    float3x3 XYZ_2_DISPLAY_PRI_MAT = XYZtoRGB(REC2020_PRI);
+    TsParams PARAMS_DEFAULT = init_TsParams( Y_MIN, Y_MAX);
+    float expShift = log2(inv_ssts(mid, PARAMS_DEFAULT))-log2(0.18);
+    TsParams PARAMS = init_TsParams( Y_MIN, Y_MAX, expShift);
+
+    float3 linearCV = ST2084_2_Y_f3(outputCV);
+    float3 rgbPost = RGBtoXYZ(REC2020_PRI) * linearCV;
+    rgbPost = rgbPost * inverse(D60_2_D65_CAT);
+    rgbPost = rgbPost * inverse(AP1_2_XYZ_MAT);
+
+    float3 rgbPre = inv_ssts_f3(rgbPost, PARAMS);
+    float3 lin = rrt_sweeteners_fitting_backward(rgbPre);
+
+    return lin;
+}
+
+float3 ComputeLutValuePrecise(float3 pq)
 {
     float3 result;
     float3 lin = ST2084_2_Y_f3(pq);
     
     const float Y_MIN = 0.0001;                     // black luminance (cd/m^2)
     const float Y_MAX = 1000.0;                     // peak white luminance (cd/m^2)
+    const float mid   = 15.0;
     
     const Chromaticities DISPLAY_PRI = REC2020_PRI; // encoding primaries (device setup)
     const Chromaticities LIMITING_PRI = REC2020_PRI;// limiting primaries
@@ -875,5 +1029,6 @@ float3 ComputeLutValue(float3 pq, float mid)
     
     return result;
 }
+
 
 #endif /* OutputTransform_h */

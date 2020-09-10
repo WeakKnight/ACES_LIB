@@ -78,6 +78,7 @@ public:
 
 float3 operator*(float3 v, float3x3 m);
 float3 operator*(float3x3 m, float3 v);
+float3 operator*(float3 v1, float3 v2);
 
 float3 operator*(float scaler, float3 v);
 float3x3 operator*(float scaler, float3x3 m);
